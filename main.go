@@ -1,3 +1,4 @@
+//go:generate go run . string EnumType string int
 package main
 
 import (
@@ -8,30 +9,36 @@ import (
 	"runtime/debug"
 	"strings"
 	"text/template"
+
+	"github.com/akatranlp/go-enum/enumtype"
 )
 
-//go:embed enum.gen.go.tmpl
-var enumTemplateStr string
+var templateFuncs = template.FuncMap{
+	"lower": strings.ToLower,
+	"upper": strings.ToUpper,
+	"capitalize": func(s string) string {
+		if len(s) == 0 {
+			return ""
+		}
+		return strings.ToUpper(s[:1]) + s[1:]
+	},
+	"combine": func(a, b string) string { return a + b },
+	"max":     func(a, b int) int { return max(a, b) },
+	"firstChar": func(s string) string {
+		if len(s) == 0 {
+			return ""
+		}
+		return s[:1]
+	},
+}
 
-var enumTemplate = template.Must(template.New("enum").
-	Funcs(template.FuncMap{
-		"lower": strings.ToLower,
-		"upper": strings.ToUpper,
-		"capitalize": func(s string) string {
-			if len(s) == 0 {
-				return ""
-			}
-			return strings.ToUpper(s[:1]) + s[1:]
-		},
-		"combine": func(a, b string) string { return a + b },
-		"max":     func(a, b int) int { return max(a, b) },
-		"firstChar": func(s string) string {
-			if len(s) == 0 {
-				return ""
-			}
-			return s[:1]
-		},
-	}).Parse(enumTemplateStr))
+//go:embed enum.str.gen.go.tmpl
+var enumStrTemplateFile string
+var enumStrTemplate = template.Must(template.New("enum").Funcs(templateFuncs).Parse(enumStrTemplateFile))
+
+//go:embed enum.int.gen.go.tmpl
+var enumIntTemplateFile string
+var enumIntTemplate = template.Must(template.New("enum").Funcs(templateFuncs).Parse(enumIntTemplateFile))
 
 type TemplateData struct {
 	App        string
@@ -40,12 +47,19 @@ type TemplateData struct {
 	EmptyValid bool
 }
 
+const (
+	enumType = iota
+	enumName
+	enumValues
+	argMinCount
+)
+
 func main() {
 	emptyValid := flag.Bool("empty", false, "allow empty value")
 	rootDir := flag.String("dir", ".", "root directory")
 	flag.Parse()
 
-	if flag.NArg() < 2 {
+	if flag.NArg() < argMinCount {
 		panic("not enough arguments")
 	}
 	args := flag.Args()
@@ -57,18 +71,25 @@ func main() {
 		panic("not a directory")
 	}
 
-	enumName := args[0]
+	enumType, err := enumtype.Parse(args[enumType])
+	if err != nil {
+		panic(err)
+	}
+
+	enumName := args[enumName]
 	packageName := strings.ToLower(enumName)
-	enumValues := args[1:]
+	enumValues := args[enumValues:]
 
 	buildInfo, ok := debug.ReadBuildInfo()
 	if !ok {
 		panic("could not read build info")
 	}
+
 	appName, _ := strings.CutPrefix(buildInfo.Path, "github.com/")
+	origArgs := append([]string{appName}, os.Args[1:]...)
 
 	data := TemplateData{
-		App:        appName,
+		App:        strings.Join(origArgs, " "),
 		Enum:       enumName,
 		EmptyValid: *emptyValid,
 		Values:     enumValues,
@@ -83,7 +104,15 @@ func main() {
 		panic(err)
 	}
 	defer f.Close()
-	if err := enumTemplate.Execute(f, data); err != nil {
-		panic(err)
+
+	switch enumType {
+	case enumtype.String:
+		if err := enumStrTemplate.Execute(f, data); err != nil {
+			panic(err)
+		}
+	case enumtype.Int:
+		if err := enumIntTemplate.Execute(f, data); err != nil {
+			panic(err)
+		}
 	}
 }
